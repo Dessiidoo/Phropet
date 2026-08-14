@@ -89,8 +89,8 @@ export async function updatePortfolioStartingBalance(balance: number): Promise<v
       .eq('id', existing.id);
   }
 }
-
-export async function updateLiveTradingEnabled(enabled: boolean): Promise<void> ;setSignals { data: existing } = await supabase.from('portfolio').select('id').limit(1).maybeSingle();
+export async function updateLiveTradingEnabled(enabled: boolean): Promise<void> {
+  const { data: existing } = await supabase.from('portfolio').select('id').limit(1).maybeSingle();
   if (!existing) {
     await supabase.from('portfolio').insert({ live_trading_enabled: enabled });
   } else {
