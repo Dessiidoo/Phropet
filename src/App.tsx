@@ -441,7 +441,7 @@ function DashboardView({
             </div>
           )}
         </div>
-      )
+      )}
 
       {/* Quick Actions */}
       <div className="flex gap-3 flex-wrap">
