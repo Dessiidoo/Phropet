@@ -46,7 +46,7 @@ async function updateSourceStatus(
 
 // --- Stooq: fetch current price + historical daily closes ---
 // Stooq symbol format: AAPL.us (stocks), BTCUSD (crypto)
-function toStooqSymbol(symbol: string, assetType: string): string {
+function toAlphavantageSymbol(symbol: string, assetType: string): string {
   if (assetType === "crypto") {
     // BTC-USD -> BTCUSD
     return symbol.replace(/-USD$/i, "USD").replace(/-EUR$/i, "EUR");
@@ -55,7 +55,7 @@ function toStooqSymbol(symbol: string, assetType: string): string {
   return `${symbol.replace(/-USD$/i, "")}.us`;
 }
 
-interface StooqQuote {
+interface AlphavantageQuote {
   symbol: string;
   price: number;
   open: number | null;
