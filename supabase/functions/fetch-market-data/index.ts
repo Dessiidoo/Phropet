@@ -65,8 +65,31 @@ interface StooqQuote {
   volume: number | null;
 }
 
-async function fetchStooqQuote(symbol: string, stooqSym: string): Promise<StooqQuote | null> {
+async function fetchAlphaVantageQuote(symbol: string): Promise<StooqQuote | null> {
   try {
+    const apiKey = Deno.env.get("ALPHA_VANTAGE_API_KEY");
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const q = data["Global Quote"];
+    if (!q || !q["05. price"]) return null;
+    const price = parseFloat(q["05. price"]);
+    if (isNaN(price) || price <= 0) return null;
+    return {
+      symbol,
+      price,
+      open: parseFloat(q["02. open"]) || null,
+      high: parseFloat(q["03. high"]) || null,
+      low: parseFloat(q["04. low"]) || null,
+      close: price,
+      volume: parseInt(q["06. volume"], 10) || null,
+    };
+  } catch (err) {
+    console.error(`Alpha Vantage error for ${symbol}:`, err);
+    return null;
+  }
+}
     // Use the CSV endpoint for latest quote
     const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t3ohlcv&h&e=csv`;
     const resp = await fetch(url, {
@@ -105,7 +128,7 @@ async function fetchStooqQuote(symbol: string, stooqSym: string): Promise<StooqQ
   }
 }
 
-async function fetchStooqHistory(stooqSym: string, days: number = 60): Promise<number[]> {
+async function fetchalphavantageHistory(stooqSym: string, days: number = 60): Promise<number[]> {
   try {
     const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&d1=${new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)}&d2=${new Date().toISOString().slice(0, 10)}&i=d`;
     const resp = await fetch(url, {
