@@ -1,11 +1,10 @@
--- Remove the obsolete Yahoo Finance provider from existing deployments.
--- The active market-data pipeline uses Stooq for stocks and CoinGecko for crypto.
+-- Replace obsolete market-data providers with the active providers.
+-- Stocks/ETFs: Alpha Vantage. Crypto: CoinGecko.
 DELETE FROM data_source_status
-WHERE source_name = 'yahoo_finance';
+WHERE source_name IN ('yahoo_finance', 'stooq');
 
--- Ensure the two active providers are represented in the status table.
 INSERT INTO data_source_status (source_name, is_live)
 VALUES
-  ('stooq', false),
+  ('alpha_vantage', false),
   ('coingecko', false)
 ON CONFLICT (source_name) DO NOTHING;
