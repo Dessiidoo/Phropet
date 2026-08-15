@@ -3,24 +3,24 @@
 
 ## Overview
 Adds auditability columns to the signals table (model version, data source, source timestamp)
-and creates a new data_source_status table that tracks whether each market data provider
-is live, when it was last contacted, and what it returned. This enforces the GoldDust
-engineering standard: every signal must be traceable to its inputs, and the system must
-never claim to monitor data sources it does not actually access.
+and creates a new data_source_status table that tracks whether each market data provider is live,
+when it was last contacted, and what it returned. This enforces the GoldDust engineering standard:
+every signal must be traceable to its inputs, and the system must never claim to monitor data sources
+it does not actually access.
 
 ## Changes
 
 ### Modified: signals table
 Added columns:
 - model_version (text, NOT NULL DEFAULT 'technical_v1') — identifies the analysis model/methodology
-- data_source (text) — name of the data provider that supplied the price data (e.g. 'yahoo_finance', 'coingecko')
+- data_source (text) — name of the data provider that supplied the price data (e.g. 'stooq', 'coingecko')
 - source_data_timestamp (timestamptz) — timestamp of the underlying market data used
 - price_at_signal (numeric) — the actual price used when the signal was generated
 
 ### New: data_source_status table
 Tracks the health and last-contact state of each market data API:
 - id (uuid, PK)
-- source_name (text, unique) — e.g. 'yahoo_finance', 'coingecko'
+- source_name (text, unique) — e.g. 'stooq', 'coingecko'
 - is_live (boolean) — whether the source responded successfully on last contact
 - last_contacted (timestamptz) — when we last attempted to reach the source
 - last_success (timestamptz) — when the source last returned valid data
@@ -36,7 +36,7 @@ Tracks the health and last-contact state of each market data API:
 ## Important Notes
 1. ALTER TABLE ADD COLUMN is safe — does not lose existing data.
 2. model_version defaults to 'technical_v1' for existing rows.
-3. data_source_status is seeded with the two known sources so the UI can display them.
+3. data_source_status is seeded with the two current sources used by fetch-market-data.
 */
 
 -- Add auditability columns to signals
@@ -74,11 +74,11 @@ CREATE POLICY "anon_update_data_source_status" ON data_source_status
 
 DROP POLICY IF EXISTS "anon_delete_data_source_status" ON data_source_status;
 CREATE POLICY "anon_delete_data_source_status" ON data_source_status
-  FOR DELETE TO anon, authenticated USING (true);
+  FOR DELETE TO anon, authenticated USING (true) WITH CHECK (true);
 
--- Seed known data sources
+-- Seed the current data sources used by fetch-market-data.
 INSERT INTO data_source_status (source_name, is_live)
 VALUES
-  ('yahoo_finance', false),
+  ('stooq', false),
   ('coingecko', false)
 ON CONFLICT (source_name) DO NOTHING;
