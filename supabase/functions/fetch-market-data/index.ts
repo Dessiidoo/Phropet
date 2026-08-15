@@ -13,12 +13,22 @@ interface AssetRow {
   asset_type: string;
 }
 
+interface Quote {
+  symbol: string;
+  price: number;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+}
+
 async function updateSourceStatus(
   supabase: ReturnType<typeof createClient>,
   sourceName: string,
   isLive: boolean,
   assetsReturned: number,
-  errorMessage: string | null
+  errorMessage: string | null,
 ) {
   const now = new Date().toISOString();
   const { data: existing } = await supabase
@@ -44,119 +54,79 @@ async function updateSourceStatus(
   }
 }
 
-// --- Stooq: fetch current price + historical daily closes ---
-// Stooq symbol format: AAPL.us (stocks), BTCUSD (crypto)
-function toAlphavantageSymbol(symbol: string, assetType: string): string {
-  if (assetType === "crypto") {
-    // BTC-USD -> BTCUSD
-    return symbol.replace(/-USD$/i, "USD").replace(/-EUR$/i, "EUR");
-  }
-  // AAPL -> AAPL.us
-  return `${symbol.replace(/-USD$/i, "")}.us`;
+function stockSymbol(symbol: string): string {
+  return symbol.replace(/-USD$/i, "").trim();
 }
 
-interface AlphavantageQuote {
-  symbol: string;
-  price: number;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  close: number | null;
-  volume: number | null;
-}
-
-async function fetchAlphaVantageQuote(symbol: string): Promise<StooqQuote | null> {
+async function fetchAlphaVantageQuote(symbol: string): Promise<Quote | null> {
   try {
     const apiKey = Deno.env.get("ALPHA_VANTAGE_API_KEY");
-    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
-    const resp = await fetch(url);
-    if (!resp.ok) return null;
+    if (!apiKey) {
+      console.error("ALPHA_VANTAGE_API_KEY is not configured");
+      return null;
+    }
+
+    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(stockSymbol(symbol))}&apikey=${encodeURIComponent(apiKey)}`;
+    const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (!resp.ok) {
+      console.error(`Alpha Vantage HTTP ${resp.status} for ${symbol}`);
+      return null;
+    }
+
     const data = await resp.json();
     const q = data["Global Quote"];
-    if (!q || !q["05. price"]) return null;
+    if (!q || !q["05. price"]) {
+      console.error(`Alpha Vantage returned no quote for ${symbol}:`, data["Note"] ?? data["Information"] ?? "no Global Quote");
+      return null;
+    }
+
     const price = parseFloat(q["05. price"]);
-    if (isNaN(price) || price <= 0) return null;
+    if (!Number.isFinite(price) || price <= 0) return null;
+
+    const num = (value: unknown): number | null => {
+      const n = parseFloat(String(value ?? ""));
+      return Number.isFinite(n) ? n : null;
+    };
+
     return {
       symbol,
       price,
-      open: parseFloat(q["02. open"]) || null,
-      high: parseFloat(q["03. high"]) || null,
-      low: parseFloat(q["04. low"]) || null,
+      open: num(q["02. open"]),
+      high: num(q["03. high"]),
+      low: num(q["04. low"]),
       close: price,
-      volume: parseInt(q["06. volume"], 10) || null,
+      volume: num(q["06. volume"]),
     };
   } catch (err) {
     console.error(`Alpha Vantage error for ${symbol}:`, err);
     return null;
   }
 }
-    // Use the CSV endpoint for latest quote
-    const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t3ohlcv&h&e=csv`;
-    const resp = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; GoldDust/1.0)" },
-    });
-    if (!resp.ok) return null;
 
-    const text = await resp.text();
-    const lines = text.trim().split("\n");
-    if (lines.length < 2) return null;
-
-    // Header: Symbol,Date,Time,Open,High,Low,Close,Volume
-    const values = lines[1].split(",");
-    if (values.length < 8) return null;
-
-    const close = parseFloat(values[6]);
-    if (isNaN(close) || close <= 0) return null;
-
-    const open = parseFloat(values[3]);
-    const high = parseFloat(values[4]);
-    const low = parseFloat(values[5]);
-    const volume = parseInt(values[7], 10);
-
-    return {
-      symbol,
-      price: close,
-      open: isNaN(open) ? null : open,
-      high: isNaN(high) ? null : high,
-      low: isNaN(low) ? null : low,
-      close,
-      volume: isNaN(volume) ? null : volume,
-    };
-  } catch (err) {
-    console.error(`Stooq quote error for ${stooqSym}:`, err);
-    return null;
-  }
-}
-
-async function fetchalphavantageHistory(stooqSym: string, days: number = 60): Promise<number[]> {
+async function fetchAlphaVantageHistory(symbol: string): Promise<number[]> {
   try {
-    const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSym)}&d1=${new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)}&d2=${new Date().toISOString().slice(0, 10)}&i=d`;
-    const resp = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; GoldDust/1.0)" },
-    });
+    const apiKey = Deno.env.get("ALPHA_VANTAGE_API_KEY");
+    if (!apiKey) return [];
+
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(stockSymbol(symbol))}&outputsize=compact&apikey=${encodeURIComponent(apiKey)}`;
+    const resp = await fetch(url, { headers: { "Accept": "application/json" } });
     if (!resp.ok) return [];
 
-    const text = await resp.text();
-    const lines = text.trim().split("\n");
-    if (lines.length < 2) return [];
+    const data = await resp.json();
+    const series = data["Time Series (Daily)"] as Record<string, Record<string, string>> | undefined;
+    if (!series) return [];
 
-    // Header: Symbol,Date,Open,High,Low,Close,Volume
-    const closes: number[] = [];
-    for (let i = 1; i < lines.length; i++) {
-      const vals = lines[i].split(",");
-      if (vals.length >= 6) {
-        const close = parseFloat(vals[4]);
-        if (!isNaN(close) && close > 0) closes.push(close);
-      }
-    }
-    return closes;
+    return Object.keys(series)
+      .sort()
+      .map((date) => parseFloat(series[date]["4. close"]))
+      .filter((price) => Number.isFinite(price) && price > 0)
+      .slice(-60);
   } catch (err) {
-    console.error(`Stooq history error for ${stooqSym}:`, err);
+    console.error(`Alpha Vantage history error for ${symbol}:`, err);
     return [];
   }
 }
 
-// --- CoinGecko ---
 interface CoinGeckoResponse {
   id: string;
   symbol: string;
@@ -231,7 +201,7 @@ Deno.serve(async (req: Request) => {
   try {
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
     const { data: assets, error: assetError } = await supabase
@@ -243,12 +213,13 @@ Deno.serve(async (req: Request) => {
     if (!assets || assets.length === 0) {
       return new Response(
         JSON.stringify({ message: "No active assets to fetch", snapshots: 0 }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
-    const cryptoAssets = (assets as AssetRow[]).filter((a) => a.asset_type === "crypto");
-    const stockAssets = (assets as AssetRow[]).filter((a) => a.asset_type !== "crypto");
+    const rows = assets as AssetRow[];
+    const cryptoAssets = rows.filter((a) => a.asset_type === "crypto");
+    const stockAssets = rows.filter((a) => a.asset_type !== "crypto");
 
     const snapshots: Array<{
       asset_id: string;
@@ -262,43 +233,36 @@ Deno.serve(async (req: Request) => {
     }> = [];
 
     let stockCount = 0;
-    let cryptoCount = 0;
-    let stockSuccess = true;
+    let stockSuccess = stockAssets.length === 0;
     let stockError: string | null = null;
 
-    // --- Fetch stock/ETF prices from Stooq ---
+    // --- Stocks / ETFs: Alpha Vantage ---
     if (stockAssets.length > 0) {
-      const stockQuotes: Map<string, StooqQuote> = new Map();
+      const stockQuotes = new Map<string, Quote>();
+
       for (const asset of stockAssets) {
-        const stooqSym = toStooqSymbol(asset.symbol, asset.asset_type);
-        const quote = await fetchStooqQuote(asset.symbol, stooqSym);
-        if (quote) {
-          stockQuotes.set(asset.symbol, quote);
-        }
+        const quote = await fetchAlphaVantageQuote(asset.symbol);
+        if (quote) stockQuotes.set(asset.symbol, quote);
       }
 
       stockSuccess = stockQuotes.size > 0;
-      stockError = stockSuccess ? null : "Stooq returned no stock quotes";
+      stockError = stockSuccess ? null : "Alpha Vantage returned no stock quotes";
 
-      // Fetch historical data for each stock to bootstrap price history
       for (const asset of stockAssets) {
         const quote = stockQuotes.get(asset.symbol);
         if (!quote) {
-          console.warn(`No Stooq quote for ${asset.symbol}`);
+          console.warn(`No Alpha Vantage quote for ${asset.symbol}`);
           continue;
         }
 
-        // Check if we have enough price history; if not, fetch and insert historical data
         const { count } = await supabase
           .from("price_snapshots")
           .select("id", { count: "exact", head: true })
           .eq("asset_id", asset.id);
 
         if (!count || count < 30) {
-          const stooqSym = toStooqSymbol(asset.symbol, asset.asset_type);
-          const history = await fetchStooqHistory(stooqSym, 60);
+          const history = await fetchAlphaVantageHistory(asset.symbol);
           if (history.length > 5) {
-            // Insert historical closes as snapshots (excluding the last one which is "today")
             const histSnapshots = history.slice(0, -1).map((close, idx) => ({
               asset_id: asset.id,
               price: close,
@@ -330,23 +294,24 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    await updateSourceStatus(supabase, "stooq", stockSuccess, stockCount, stockSuccess ? null : stockError);
+    await updateSourceStatus(
+      supabase,
+      "alpha_vantage",
+      stockSuccess,
+      stockCount,
+      stockSuccess ? null : stockError,
+    );
 
-    // --- Fetch crypto prices from CoinGecko ---
-    let cryptoSuccess = true;
+    // --- Crypto: CoinGecko ---
+    let cryptoCount = 0;
+    let cryptoSuccess = cryptoAssets.length === 0;
     let cryptoError: string | null = null;
 
     if (cryptoAssets.length > 0) {
       const coingeckoIds = new Map<string, { assetId: string; symbol: string }>();
-      const unmappedCrypto: AssetRow[] = [];
-
       for (const asset of cryptoAssets) {
         const geckoId = COINGECKO_ID_MAP[asset.symbol];
-        if (geckoId) {
-          coingeckoIds.set(geckoId, { assetId: asset.id, symbol: asset.symbol });
-        } else {
-          unmappedCrypto.push(asset);
-        }
+        if (geckoId) coingeckoIds.set(geckoId, { assetId: asset.id, symbol: asset.symbol });
       }
 
       const { quotes: cryptoQuotes, success, error: geckoError } = await fetchCoinGeckoPrices(coingeckoIds);
@@ -360,7 +325,6 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
-        // Bootstrap historical data for crypto if needed
         const { count } = await supabase
           .from("price_snapshots")
           .select("id", { count: "exact", head: true })
@@ -375,7 +339,7 @@ Deno.serve(async (req: Request) => {
               if (chartResp.ok) {
                 const chartData = await chartResp.json();
                 const prices: Array<[number, number]> = chartData.prices ?? [];
-                const histSnapshots = prices.slice(0, -1).map((entry, idx) => ({
+                const histSnapshots = prices.slice(0, -1).map((entry) => ({
                   asset_id: asset.id,
                   price: entry[1],
                   volume: null,
@@ -408,56 +372,44 @@ Deno.serve(async (req: Request) => {
         });
         cryptoCount++;
       }
-
-      // Fall back to Stooq for unmapped crypto symbols
-      if (unmappedCrypto.length > 0) {
-        for (const asset of unmappedCrypto) {
-          const stooqSym = toStooqSymbol(asset.symbol, asset.asset_type);
-          const quote = await fetchStooqQuote(asset.symbol, stooqSym);
-          if (quote) {
-            snapshots.push({
-              asset_id: asset.id,
-              price: quote.price,
-              volume: quote.volume,
-              change_pct: quote.open ? ((quote.price - quote.open) / quote.open) * 100 : null,
-              high_24h: quote.high,
-              low_24h: quote.low,
-              open_24h: quote.open,
-              market_cap: null,
-            });
-            cryptoCount++;
-          }
-        }
-      }
     }
 
-    await updateSourceStatus(supabase, "coingecko", cryptoSuccess, cryptoCount, cryptoSuccess ? null : cryptoError);
+    await updateSourceStatus(
+      supabase,
+      "coingecko",
+      cryptoSuccess,
+      cryptoCount,
+      cryptoSuccess ? null : cryptoError,
+    );
 
     if (snapshots.length > 0) {
       const { error: insertError } = await supabase
         .from("price_snapshots")
         .insert(snapshots);
-
-      if (insertError) {
-        console.error("Failed to insert snapshots:", insertError);
-      }
+      if (insertError) console.error("Failed to insert snapshots:", insertError);
     }
+
+    // Clean up obsolete provider status rows from existing deployments.
+    await supabase
+      .from("data_source_status")
+      .delete()
+      .in("source_name", ["yahoo_finance", "stooq"]);
 
     return new Response(
       JSON.stringify({
-        message: `Fetched ${snapshots.length} real price snapshots (${stockCount} from Stooq, ${cryptoCount} from CoinGecko)`,
+        message: `Fetched ${snapshots.length} real price snapshots (${stockCount} from Alpha Vantage, ${cryptoCount} from CoinGecko)`,
         snapshots: snapshots.length,
         stock_count: stockCount,
         crypto_count: cryptoCount,
-        sources: { stooq: stockCount, coingecko: cryptoCount },
+        sources: { alpha_vantage: stockCount, coingecko: cryptoCount },
       }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
     console.error("fetch-market-data error:", err);
     return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 });
